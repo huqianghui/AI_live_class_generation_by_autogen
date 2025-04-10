@@ -1,0 +1,29 @@
+{
+  "debug": true,
+  "chat": {
+    "avatars": {
+      "default_avatar_url": "public/icons/default_avatar.png"
+    }
+  },
+  "ui": {
+    "name": "中国小学语文教学内容生成器", 
+    "description": "上传文件或输入需求，自动生成教学内容", 
+    "github": "https://github.com/microsoft/autogen",
+    "theme": "system"
+  },
+  "features": {
+    "latex": {
+      "enabled": true
+    }
+  },
+  "project": {
+    "name": "小学语文教学内容生成器" 
+  },
+  "server": {
+    "timeout": 300,
+    "max_upload_size": 50, 
+    "max_message_size": 60, 
+    "max_workers": 8,
+    "port": 8989
+  }
+}
