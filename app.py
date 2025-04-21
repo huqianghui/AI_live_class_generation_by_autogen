@@ -15,16 +15,21 @@ from autogen_agentchat.messages import (
 from autogen_agentchat.teams import SelectorGroupChat
 from autogen_core import CancellationToken
 
-from agents.deep_research.main import create_team
+from agents.catch_up_and_explore_by_AI.catch_up_and_explore_by_AI_agents import (
+    create_catch_up_team,
+)
 from agents.file_processor.main import process_file
-from config import DEEP_RESEARCH_AGENT
+from agents.open_topic_class_generation.open_topic_class_generation_agents import (
+    create_team,
+)
+from config import CATCH_UP_AND_EXPLORE_BY_AI_AGENT, OPEN_TOPIC_CLASS_GENERATION_AGENT
 
 
 @cl.set_chat_profiles
 async def chat_profile():
     return [
         cl.ChatProfile(
-            name=DEEP_RESEARCH_AGENT,
+            name=OPEN_TOPIC_CLASS_GENERATION_AGENT,
             markdown_description="生成中国小学语文教学内容，包括诗词鉴赏、阅读理解和互动练习。",
             icon="public/icons/deep_research.png",
             starters=[
@@ -46,9 +51,11 @@ async def chat_profile():
 
 @cl.on_chat_start
 async def on_chat_start():
-    deep_research_team = create_team()
+    open_topic_team = create_team()
+    catch_up_team = create_catch_up_team()
     
-    cl.user_session.set(DEEP_RESEARCH_AGENT, deep_research_team)
+    cl.user_session.set(OPEN_TOPIC_CLASS_GENERATION_AGENT, open_topic_team)
+    cl.user_session.set(CATCH_UP_AND_EXPLORE_BY_AI_AGENT, catch_up_team)
 
 @cl.on_message  # type: ignore
 async def chat(message: cl.Message) -> None:
@@ -70,14 +77,15 @@ async def chat(message: cl.Message) -> None:
             await cl.Message(content=error_msg + "请重试或联系系统管理员。").send()
     else:
         # Process text request directly
-        deep_research_team = cl.user_session.get(DEEP_RESEARCH_AGENT)
+        open_topic_team = cl.user_session.get(OPEN_TOPIC_CLASS_GENERATION_AGENT)
         await run_stream_team(
-            deep_research_team,
+            open_topic_team,
             message,
         )
 
 async def process_uploaded_files(files, message: cl.Message):
-    deep_research_team = cl.user_session.get(DEEP_RESEARCH_AGENT)
+    # Use catch_up_team instead of open_topic_team for file processing
+    catch_up_team = cl.user_session.get(CATCH_UP_AND_EXPLORE_BY_AI_AGENT)
     
     combined_content = ""
     file_count = len(files)
@@ -151,9 +159,9 @@ async def process_uploaded_files(files, message: cl.Message):
                 # Fix: Create a separate message instead of passing string to step.send()
                 await cl.Message(content="文件处理完成。正在基于提取的内容生成教学材料...").send()
                 
-                # Now run the deep research team with the processed content
+                # Now run the catch_up_team with the processed content
                 new_message = cl.Message(content=combined_content)
-                await run_stream_team(deep_research_team, new_message)
+                await run_stream_team(catch_up_team, new_message)
             except asyncio.TimeoutError:
                 await cl.Message(content="内容处理超时，请尝试减少文件数量或拆分为较小的请求。").send()
             except Exception as e:
@@ -272,45 +280,123 @@ async def run_stream_team(team=SelectorGroupChat, message: cl.Message | None = N
     await final_answer.send()
 
 def md_to_pdf(md: str) -> str:
-    from markdown_pdf import MarkdownPdf, Section
+    import base64
+    import os  # Import os at the beginning of the function
+    import re
+    import urllib.request
+    from io import BytesIO
 
     os.makedirs("public/pdfs", exist_ok=True)
+    os.makedirs("public/fonts", exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"public/pdfs/course_materials_{timestamp}.pdf"
 
-    # Clean up the content - no need to check for TERMINATE again as it should be handled earlier
+    # Clean up the content
     content = md
     
     # Ensure we have content
     if not content:
         content = "# 无内容 \n\n请检查生成过程，内容生成失败。"
-        
-    pdf = MarkdownPdf()
+
+    # Add a title if there isn't one
+    if not content.startswith('# '):
+        content = f"# 中国小学语文教学内容\n\n{content}"
     
-    # Set only standard PDF metadata fields
-    pdf.meta["title"] = "中国小学语文教学内容"
-    pdf.meta["keywords"] = "教学内容,小学语文,教案"
-    pdf.meta["subject"] = "自动生成的中国小学语文教学内容"
+    # Download a Chinese font if we don't have one already
+    chinese_font_path = "public/fonts/NotoSansSC-Regular.ttf"
+    if not os.path.exists(chinese_font_path):
+        try:
+            print("Downloading Chinese font...")
+            font_url = "https://github.com/jsntn/webfonts/blob/master/NotoSansSC-Regular.ttf"
+            urllib.request.urlretrieve(font_url, chinese_font_path)
+            print(f"Downloaded font to {chinese_font_path}")
+        except Exception as font_error:
+            print(f"Error downloading font: {str(font_error)}")
+            # Create a fallback font
+            chinese_font_path = None
     
-    # Add content as a section with table of contents
-    pdf.add_section(
-        Section(
-            content,
-            toc=True,
-        )
-    )
-    
+    # Create PDF with reportlab
     try:
-        pdf.save(filename)
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.pdfgen import canvas
+
+        # Try to register the Chinese font
+        has_chinese_font = False
+        if chinese_font_path and os.path.exists(chinese_font_path):
+            try:
+                pdfmetrics.registerFont(TTFont("NotoSansSC", chinese_font_path))
+                has_chinese_font = True
+                print("Successfully registered Chinese font")
+            except Exception as font_register_error:
+                print(f"Error registering font: {str(font_register_error)}")
+        
+        # Create a basic PDF with title
+        c = canvas.Canvas(filename, pagesize=A4)
+        width, height = A4
+        
+        # Draw a title - use Chinese font if available
+        font_name = "NotoSansSC" if has_chinese_font else "Helvetica-Bold"
+        c.setFont(font_name, 16)
+        c.drawString(50, height - 50, "中国小学语文教学内容")
+        
+        # Draw content
+        font_name = "NotoSansSC" if has_chinese_font else "Helvetica"
+        c.setFont(font_name, 10)
+        y_position = height - 80
+        line_height = 14
+        
+        # Simplify content to plain text
+        plain_text = re.sub(r'#+ (.*)', r'\1', content)  # Headers to plain text
+        plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', plain_text)  # Remove bold
+        plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)  # Remove italics
+        
+        # Add text by lines
+        for line in plain_text.split('\n'):
+            if not line.strip():
+                y_position -= line_height * 0.5
+                continue
+            
+            # Check if we need a new page
+            if y_position < 50:
+                c.showPage()
+                c.setFont(font_name, 10)
+                y_position = height - 50
+            
+            # Simple word wrap with better handling for Chinese text
+            if len(line) * 5 > width - 100:  # Rough estimate of line width
+                # For Chinese text, we need shorter chunks
+                chunk_size = 40 if has_chinese_font else 80
+                chunks = [line[i:i+chunk_size] for i in range(0, len(line), chunk_size)]
+                for chunk in chunks:
+                    c.drawString(50, y_position, chunk)
+                    y_position -= line_height
+            else:
+                c.drawString(50, y_position, line)
+                y_position -= line_height
+        
+        c.save()
+        print(f"Successfully created PDF with reportlab: {filename}")
+        
+        # If we couldn't display Chinese characters, add a note to the markdown file
+        if not has_chinese_font:
+            md_note_filename = f"public/md/course_materials_{timestamp}_no_chinese_font.md"
+            with open(md_note_filename, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"Created fallback markdown file with full content: {md_note_filename}")
+        
         return filename
-    except Exception as e:
-        # Log error and save a simplified version if there are issues
-        print(f"Error saving PDF: {str(e)}")
+        
+    except Exception as reportlab_error:
+        print(f"ReportLab failed: {str(reportlab_error)}")
         print(traceback.format_exc())
         
-        # Create a simple text file instead
-        text_filename = filename.replace('.pdf', '.txt')
-        with open(text_filename, "w", encoding="utf-8") as f:
+        # Last resort: PDF-named text file
+        print("PDF generation failed, creating a text file with .pdf extension")
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write("# 中国小学语文教学内容\n\n")
             f.write(content)
-        return text_filename
+        print(f"Created text file with PDF extension: {filename}")
+        return filename

@@ -4,8 +4,8 @@ from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.conditions import MaxMessageTermination, TextMentionTermination
 from autogen_agentchat.teams import SelectorGroupChat
 
-from agents.deep_research.tools.bing_search import bing_search_tool
-from agents.deep_research.tools.fetch_webpage import fetch_webpage_tool
+from agents.tools.bing_search import bing_search_tool
+from agents.tools.fetch_webpage import fetch_webpage_tool
 from config import get_model_client
 
 model_client = get_model_client()

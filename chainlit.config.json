@@ -24,6 +24,6 @@
     "max_upload_size": 50, 
     "max_message_size": 60, 
     "max_workers": 8,
-    "port": 8989
+    "port": 8089
   }
 }

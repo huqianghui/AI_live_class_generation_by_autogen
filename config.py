@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DEEP_RESEARCH_AGENT = "Deep Research Agent"
+OPEN_TOPIC_CLASS_GENERATION_AGENT = "Open Topic Class Generation Agent"
+
+CATCH_UP_AND_EXPLORE_BY_AI_AGENT = "Catch-up And Explore By AI Agent"
 
 AZURE_OPENAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT")
