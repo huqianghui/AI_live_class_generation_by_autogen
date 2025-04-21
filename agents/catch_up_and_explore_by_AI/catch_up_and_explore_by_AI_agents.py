@@ -1,4 +1,3 @@
-from datetime import datetime
 
 from autogen_agentchat.agents import AssistantAgent
 from autogen_agentchat.conditions import MaxMessageTermination, TextMentionTermination
@@ -6,129 +5,234 @@ from autogen_agentchat.teams import SelectorGroupChat
 
 from agents.tools.bing_search import bing_search_tool
 from agents.tools.fetch_webpage import fetch_webpage_tool
-from config import get_model_client
+from agents.tools.url_accessiable import url_accessible_valid_tool
+from config import (
+    get_advance_model_client,
+    get_low_model_client,
+    get_model_client,
+    get_moderate_model_client,
+)
 
 model_client = get_model_client()
+advance_model_client = get_advance_model_client()
+moderate_model_client = get_moderate_model_client()
+low_model_client = get_low_model_client()
 
 MAX_MESSAGES  = 50
+max_messages_termination = MaxMessageTermination(max_messages=MAX_MESSAGES)
 
-PROMPT_RESERACH = """你是一个专注于个性化教学的助手，负责根据具体学生的学习记录创建定制化的教学内容。
 
-你的主要任务是分析该学生的学习记录，并创建定制化的教学计划：
-1. 仔细分析该学生在课件中的表现记录，找出他们的知识缺口和不理解的概念
-2. 注意该学生表现出兴趣的话题和领域
-3. 使用bing_search工具查找相关资料，如果需要网页更完整的内容使用fetch_webpage工具获取网页完整内容来补充学生学习中的知识缺口
-4. 根据该学生的兴趣点，搜索额外的相关知识进行拓展
-5. 在标题中突出学生名字，兴趣点和问题点内容。
+PROMPT_RESERACH = """
+You are a personalized teaching assistant responsible for creating customized teaching content based on specific students' learning records.
 
-创建一个完整的教学计划，包括：
-- 第一部分：针对性复习
-  * 列出该学生掌握不好的关键知识点
-  * 为每个知识点提供清晰简洁的解释
-  * 设计简单的例子帮助理解
+Your primary tasks are to analyze the student's learning records and create a personalized teaching plan:
+1. Carefully analyze the student's performance records in the courseware to identify their knowledge gaps and misunderstood concepts.
+2. Pay attention to topics and areas the student shows interest in.
+3. Use the bing_search tool to find relevant materials. If more complete content from a webpage is needed, use the fetch_webpage tool to retrieve the full content to supplement the student's knowledge gaps.
+4. Use the bing_search tool to find relevant images and videos to enhance the learning experience. Set `response_filter` to `images` for images and `videos` for videos. Validate the URLs to ensure they are correct, accessible, and point to actual content (not empty or placeholder URLs like https://example.com) before embedding them.
+5. IMPORTANT RESTRICTION: You MUST ONLY use image and video URLs that are directly returned from the bing_search tool. Never generate image/video URLs yourself. If you cannot find appropriate multimedia through bing_search, simply note that suitable media was not found rather than creating placeholder URLs. No image or video is better than a placeholder.
+6. Create interactive teaching content with the following structure:
+   - Key learning objectives
+   - Core content with clear explanations
+   - Visual aids (directly embedded images, charts, or diagrams using markdown syntax: ![description](image_url))
+   - Video resources (embedded using markdown syntax: [video description](video_url))
+   - Interactive elements (discussions, group activities, hands-on exercises)
+   - Learning assessments (quizzes, questions, problem sets)
+7. Use the url_accessible_valid_tool to verify that the embedded image and video URLs are accessible and ensure they are unique and not duplicated in the content.
+8. Ensure all the the content of the images and videos are in Simplified Chinese and relevant to the content. Don't include any English or Japanese content in the images and videos.
 
-- 第二部分：兴趣拓展
-  * 基于该学生表现出兴趣的点进行知识拓展
-  * 提供与课程相关但更深入或更广泛的内容
-  * 包含有趣的实例、应用场景或小故事
 
-所有内容应以中文呈现，适合一对一教学场景。
+Break down complex topics into understandable sections. Verify information across multiple sources.
+When you find relevant educational resources, extract teaching methodologies and adapt them to the current course.
+When including multimedia, specifically search for "images of [topic]" or "videos about [topic]" using the bing_search tool, then directly embed them in markdown:
+- For images: ![description](image_url) - ensure the image URL doesn't contain query parameters and is directly from bing_search results
+- For videos: [video description](video_url) - ensure the video URL doesn't contain query parameters and is directly from bing_search results
+
+Present the created materials in markdown format, ensuring multimedia content is directly viewable.
+
+All outputs and content retrieved from bing_search must be in Simplified Chinese (Mandarin).
 """
 
-PROMPT_VERIFIER = """你是一个个性化教学内容审核专家。
-你的任务是：
-1. 确保教学计划直接针对该学生的具体知识缺口
-2. 验证兴趣拓展部分确实基于该学生表现出的兴趣点
-3. 检查内容是否适合一对一教学
-4. 评估教学计划是否包含了必要的互动元素来验证学生理解
-5. 确保内容的难度和表达方式适合该目标学生
+PROMPT_VERIFIER = """
+You are a personalized teaching content review specialist.
+Your tasks are:
+1. Ensure the teaching plan directly addresses the specific knowledge gaps of the student.
+2. Verify that the interest expansion section is indeed based on the student's expressed interests.
+3. Check whether the content is suitable for one-on-one teaching.
+4. Evaluate whether the teaching plan includes necessary interactive elements to validate the student's understanding.
+5. Ensure the difficulty and expression of the content are appropriate for the target student.
+6. Verify whether multimedia elements (images and videos) are correctly embedded in markdown and are directly viewable.
+7. Ensure all embedded images use the correct markdown syntax: ![description](image_url), and the URLs are accessible and unique, not duplicated in the content.
+8. Ensure all embedded videos use the correct markdown syntax: [video description](video_url), and the URLs are accessible and unique, not duplicated in the content.
+9. Ensure all the the content of the images and videos are in Simplified Chinese and relevant to the content. Don't include any English or Japanese content in the images and videos.
+10. Use the url_accessible_valid_tool to verify that the embedded image and video URLs are accessible and ensure they are unique and not duplicated in the content.
 
-你的回应应包含：
-- 针对性评估（内容是否直接解决该学生的知识缺口）
-- 兴趣匹配度评估（拓展内容是否符合该学生兴趣）
-- 时间安排合理性（内容是否适合40分钟课程）
-- 互动元素评估（是否有效验证该学生的理解）
-- 改进建议（如有需要）
-- 结论：以"继续完善"或"已批准"结束
+Your response should include:
+- Targeted assessment (whether the content directly addresses the student's knowledge gaps)
+- Interest matching assessment (whether the expansion content aligns with the student's interests)
+- Time arrangement rationality (whether the content fits a 40-minute lesson)
+- Interactive elements assessment (whether they effectively validate the student's understanding)
+- Multimedia elements assessment (if there are some images or videos, check whether images and videos are correctly embedded and accessible)
+- Suggestions for improvement (if needed)
+- Conclusion: End with "CONTINUE DEVELOPMENT" or "APPROVED"
 
-所有内容应以中文呈现。
+All outputs and content including images and videos retrieved from bing_search must be in Simplified Chinese (Mandarin).
 """
 
-PROMPT_SUMMARY = """你是个性化教学材料的整合者。你的任务是将创建的针对该学生教学内容整合为一个完整的教案。
+PROMPT_SUMMARY = """
+You are a compiler of personalized teaching materials. Your task is to integrate the created teaching content into a complete lesson plan.
 
-请创建一个结构清晰的针对该学生学习情况下，进一步加强的教案文档，包括：
-1. 课程标题和学习目标
-2. 第一部分：知识查缺补漏
-   - 该学生的答错的问题和具体知识点及解释
-   - 该学生的答错的问题进一步示例和练习
-3. 第二部分：兴趣点拓展
-   - 该学生在学习过程中感兴趣或者提出问题的拓展知识内容
-   - 以及这些兴趣点和问题的相关实例或应用
-4. 互动环节设计（穿插在两部分中）
-   - 3-5个简答题，用于验证兴趣点是否得到加深理解
-   - 每个问题的预期答案和评估标准
-5. 教学流程时间线（精确到10分钟）
-6. 教学资源和参考材料
+Please create a well-structured lesson plan tailored to the student's learning situation, including:
+1. Course title and learning objectives. Course title should include the student's name and the course name.
+2. Part 1: Knowledge gap filling
+   - The student's incorrect answers and specific knowledge points with explanations
+   - Further examples and exercises for the student's incorrect answers
+   - Relevant images or videos to enhance understanding
+   - Use the format: ![description](image_url) for images
+   - Use the format: [video description](video_url) for videos
+   - Ensure all images and videos are directly viewable in markdown
+   - Ensure all the the content of the images and videos are in Simplified Chinese and relevant to the content. Don't include any English or Japanese content in the images and videos.
+   - Use the url_accessible_valid_tool to verify that the embedded image and video URLs are accessible and ensure they are unique and not duplicated in the content.
+3. Part 2: Interest point expansion
+   - Expanded knowledge content related to topics or questions the student showed interest in during learning
+   - Relevant examples or applications of these interest points and questions
+   - Relevant images or videos to enhance understanding
+   - Use the format: ![description](image_url) for images
+   - Use the format: [video description](video_url) for videos
+   - Ensure all images and videos are directly viewable in markdown
+   - Ensure all the the content of the images and videos are in Simplified Chinese and relevant to the content. Don't include any English or Japanese content in the images and videos.
+   - Use the url_accessible_valid_tool to verify that the embedded image and video URLs are accessible and ensure they are unique and not duplicated in the content.
+   - Use the url_accessible_valid_tool to verify that the embedded image and video URLs are accessible and ensure they are unique and not duplicated in the content.
+4. Interactive session design (interspersed in both parts)
+   - 3-5 short-answer questions to validate whether the interest points are understood in depth
+   - Expected answers and evaluation criteria for each question
+5. Teaching process timeline (accurate to 10 minutes)
+6. Teaching resources and reference materials
 
-使用清晰的markdown格式，使教案易于教师直接使用。
-你的最终文档应以"TERMINATE"一词结束，表示完成。
+Use clear markdown formatting to make the lesson plan easy for teachers to use directly.
 
-所有内容应以中文呈现。
+All outputs and content including images and videos retrieved from bing_search must be in Simplified Chinese (Mandarin).
 """
+
+PROMPT_MARKDOWN_CONTENT_FORMAT = """You are a professional Markdown content processing assistant.
+
+When processing Markdown text containing multimedia elements, please follow these rules:
+
+1. Image link processing:
+   - Detect image tags in the format `![description](image_URL)`
+   - Remove all query parameters from image URLs (the question mark ? and everything after it)
+   - For example: Convert `![image description](https://example.com/image.jpg?parameter=value)` to `![image description](https://example.com/image.jpg)`
+
+2. Video link processing:
+   - Detect video embedding formats in Markdown `[![video description](thumbnail_URL)](video_URL)`
+   - Remove all query parameters from both thumbnail URLs and video URLs
+   - For example: Convert `[video description](https://example.com/video?parameter=value)` 
+     to `[video description](https://example.com/video)`
+   - The video tag has no ! in front of it.
+     For example: Convert `![video description](https://example.com/video)`
+     to `[video description](https://example.com/video)`
+
+3. Keep all other parts of the original content unchanged
+
+4. Format the file in Markdown to ensure it's clear and readable. Don't use formats like ```markdown at the beginning; use Markdown format directly without additional content like "Thank you for your detailed evaluation! Below is the final version of the course content for teachers to use directly". Just provide the markdown content with # title and ## subtitle etc.
+
+5. You must add "TERMINATE" as a completion signal on the last line after processing the content.
+
+Below is an example showing how to correctly format and add the termination signal:
+
+Input:
+```
+# 数据结构基础课程
+
+## 学习目标
+- 了解基本数据结构
+- 掌握数组和链表操作
+
+![数组示例图](https://example.com/array.jpg?size=medium&quality=high)
+
+[视频教程](https://example.com/video-tutorial?autoplay=true&t=30s)
+```
+
+Output:
+# 数据结构基础课程
+
+## 学习目标
+- 了解基本数据结构
+- 掌握数组和链表操作
+
+![数组示例图](https://example.com/array.jpg)
+
+[视频教程](https://example.com/video-tutorial)
+TERMINATE
+"""
+text_mention_termination = TextMentionTermination("TERMINATE")
+
 
 PROMPT_SELECTOR = """
-你正在协调一个个性化教学团队，通过选择下一位成员发言/行动。可用的团队成员角色有：
-{roles}。
-course_content_creator负责分析该学生记录并创建针对性的教学内容。
-content_reviewer评估教学计划是否满足针对该学生的错题点和感兴趣点等的个性化需求和时间要求。
-materials_compiler整合所有内容为完整的教案，仅在内容被批准后执行。
+You are coordinating a personalized teaching team by selecting the next member to speak/act. The available team member roles are:
+{roles}.
+course_content_creator is responsible for analyzing the student's records and creating targeted teaching content.
+content_reviewer evaluates whether the teaching plan meets the personalized needs of the student's incorrect answers and interests, and the time requirements.
+materials_compiler integrates all content into a complete lesson plan, only executing after the content is approved.
+markdown_content_formator formats markdown content by removing query parameters from image and video URLs when content is summarized by materials_compiler.
 
-根据当前情况，选择最合适的下一位发言人。
-course_content_creator应分析学生记录并创建教学内容。
-content_reviewer应评估教学计划的针对性和完整性（如需验证/评估进度，选择此角色）。
-仅当content_reviewer批准内容后，才选择materials_compiler角色。
 
-基于以下因素做出选择：
-1. 当前教学内容创建阶段
-2. 上一位发言者的发现或建议
-3. 是否需要验证或需要新信息
-阅读以下对话，然后从{participants}中选择下一个角色。只返回角色名称。
+Based on the current situation, select the most appropriate next speaker.
+course_content_creator should analyze the student's records and create teaching content.
+content_reviewer should evaluate the targetedness and completeness of the teaching plan (select this role if validation/evaluation is needed).
+materials_compiler should integrate the content into a complete lesson plan.
+Only select the materials_compiler role after the content_reviewer approves the content.
+markdown_content_formator should format the content when the materials_compiler has summarized the content.It is the final step of the process.
+
+Make your selection based on the following factors:
+1. The current stage of teaching content creation
+2. The findings or suggestions of the previous speaker
+3. Whether validation or new information is needed
+4. The content is engouh to be summarized into a complete lesson plan
+5. The content is ready to be formatted into markdown
+Read the following conversation, then select the next role from {participants}. Return only the role name.
 
 {history}
 
-阅读上述对话，然后从{participants}中选择下一个角色。只返回角色名称。
+Read the above conversation, then select the next role from {participants}. Return only the role name.
 """
 
-text_mention_termination = TextMentionTermination("TERMINATE")
-max_messages_termination = MaxMessageTermination(max_messages=MAX_MESSAGES)
 termination = text_mention_termination | max_messages_termination
-
 def create_catch_up_team()->SelectorGroupChat:
     research_assistant = AssistantAgent(
         "course_content_creator",
-        description="分析学生学习记录，创建针对性教学内容和互动环节的智能体。",
-        model_client=model_client,
+        description="Analyze student learning records and create targeted teaching content and interactive sessions.",
+        model_client=advance_model_client,
         model_client_stream=True,
         system_message=PROMPT_RESERACH,
-        tools=[fetch_webpage_tool, bing_search_tool])
+        tools=[fetch_webpage_tool, bing_search_tool, url_accessible_valid_tool])
 
     verifier = AssistantAgent(
         "content_reviewer",
-        description="审核个性化教学内容的针对性、完整性和时间安排的智能体。",
-        model_client=model_client,
+        description="Review the targetedness, completeness, and time arrangement of personalized teaching content.",
+        model_client=advance_model_client,
         model_client_stream=True,
+        tools=[url_accessible_valid_tool],
         system_message=PROMPT_VERIFIER)
 
     summary_agent = AssistantAgent(
         name="materials_compiler",
-        description="将所有教学内容整合为完整40分钟教案的智能体。",
-        model_client=model_client,
+        description="Integrate all teaching content into a complete 40-minute lesson plan.",
+        model_client=moderate_model_client,
         model_client_stream=True,
+        tools=[url_accessible_valid_tool],
         system_message=PROMPT_SUMMARY)
     
+    markdown_content_formator = AssistantAgent(
+        "markdown_content_formator",
+        description="An agent that formats markdown content by removing query parameters from image and video URLs.",
+        model_client=low_model_client,
+        model_client_stream=True,
+        system_message=PROMPT_MARKDOWN_CONTENT_FORMAT)
+    
     return SelectorGroupChat(
-        [research_assistant, verifier, summary_agent],
+        [research_assistant, verifier, summary_agent,markdown_content_formator],
         termination_condition=termination,
-        model_client=model_client,
+        model_client=moderate_model_client,
         selector_prompt=PROMPT_SELECTOR,
         allow_repeated_speaker=True)

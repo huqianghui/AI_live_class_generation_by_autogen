@@ -1,14 +1,27 @@
+import logging
+
+logging.getLogger('chainlit').setLevel(logging.ERROR)
+logging.getLogger().setLevel(logging.WARNING)
+
+# from opentelemetry import trace
+# from opentelemetry.sdk.trace import TracerProvider
+# from opentelemetry.sdk.trace.sampling import ALWAYS_OFF
+
+
+
 import asyncio
+import json
 import os
 import tempfile
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 import chainlit as cl
 from autogen_agentchat.base import TaskResult
 from autogen_agentchat.messages import (
     ModelClientStreamingChunkEvent,
+    BaseChatMessage,
     StopMessage,
     TextMessage,
 )
@@ -22,7 +35,39 @@ from agents.file_processor.main import process_file
 from agents.open_topic_class_generation.open_topic_class_generation_agents import (
     create_team,
 )
-from config import CATCH_UP_AND_EXPLORE_BY_AI_AGENT, OPEN_TOPIC_CLASS_GENERATION_AGENT
+from config import CATCH_UP_AND_EXPLORE_BY_AI_AGENT, OPEN_TOPIC_CLASS_GENERATION_AGENT,CURRENT_AGENT_TEAM_NAME
+
+
+# Add serialization helper function
+def ensure_serializable(obj):
+    """Ensure objects can be serialized to JSON by recursively converting complex types."""
+    try:
+        # Test if object can be serialized
+        json.dumps(obj)
+        return obj
+    except (TypeError, OverflowError, ValueError):
+        # Handle dict-like objects
+        if isinstance(obj, dict):
+            return {k: ensure_serializable(v) for k, v in obj.items()}
+            
+        # Handle list-like objects
+        if isinstance(obj, (list, tuple)):
+            return [ensure_serializable(item) for item in obj]
+            
+        # Handle objects with attributes
+        if hasattr(obj, '__dict__'):
+            serializable_dict = {}
+            for key, value in obj.__dict__.items():
+                # Skip private attributes
+                if not key.startswith('_'):
+                    try:
+                        serializable_dict[key] = ensure_serializable(value)
+                    except Exception:
+                        serializable_dict[key] = str(value)
+            return serializable_dict
+        
+        # Default to string representation
+        return str(obj)
 
 
 @cl.set_chat_profiles
@@ -35,15 +80,15 @@ async def chat_profile():
             starters=[
                 cl.Starter(
                     label="李白《静夜思》教学",
-                    message="请为小学三年级学生创建一节关于李白《静夜思》的课程。包括诗词背景介绍、重点字词解释、诗句赏析、朗读指导、互动活动和学习检测题目。",
+                    message="请为小学三年级学生创建一节关于李白《静夜思》的课程。包括诗词背景介绍、重点字词解释、诗句赏析、朗读指导、互动活动和学习检测题目。里面涉及到的人物，地点，名胜古迹等等最好都有图片，视频等多媒体素材，方便学生理解和记忆。这些多模态的内容在markdown中使用正确的url和语法进行标记。",
                 ),
                 cl.Starter(
                     label="杜甫《春夜喜雨》教学",
-                    message="为小学四年级学生设计一节杜甫《春夜喜雨》的教学课件，包含诗人简介、诗词解析、情景想象活动、诗词朗诵技巧、课堂互动环节和课后习题。",
+                    message="为小学四年级学生设计一节杜甫《春夜喜雨》的教学课件，包含诗人简介、诗词解析、情景想象活动、诗词朗诵技巧、课堂互动环节和课后习题。里面涉及到的人物，地点，名胜古迹等等最好都有图片，视频等多媒体素材，方便学生理解和记忆。",
                 ),
                 cl.Starter(
                     label="成语故事《守株待兔》教学",
-                    message="为小学二年级学生创建一节关于成语故事《守株待兔》的教学内容，包括故事原文、生字词解释、故事寓意分析、角色扮演活动、课堂提问和课后练习。",
+                    message="为小学二年级学生创建一节关于成语故事《守株待兔》的教学内容，包括故事原文、生字词解释、故事寓意分析、角色扮演活动、课堂提问和课后练习。里面涉及到的人物，地点，名胜古迹等等最好都有图片，视频等多媒体素材，方便学生理解和记忆。",
                 ),
             ],
         ),
@@ -56,6 +101,7 @@ async def on_chat_start():
     
     cl.user_session.set(OPEN_TOPIC_CLASS_GENERATION_AGENT, open_topic_team)
     cl.user_session.set(CATCH_UP_AND_EXPLORE_BY_AI_AGENT, catch_up_team)
+    cl.user_session.set(CURRENT_AGENT_TEAM_NAME,"")
 
 @cl.on_message  # type: ignore
 async def chat(message: cl.Message) -> None:
@@ -78,6 +124,7 @@ async def chat(message: cl.Message) -> None:
     else:
         # Process text request directly
         open_topic_team = cl.user_session.get(OPEN_TOPIC_CLASS_GENERATION_AGENT)
+        cl.user_session.set(CURRENT_AGENT_TEAM_NAME,OPEN_TOPIC_CLASS_GENERATION_AGENT)
         await run_stream_team(
             open_topic_team,
             message,
@@ -86,6 +133,7 @@ async def chat(message: cl.Message) -> None:
 async def process_uploaded_files(files, message: cl.Message):
     # Use catch_up_team instead of open_topic_team for file processing
     catch_up_team = cl.user_session.get(CATCH_UP_AND_EXPLORE_BY_AI_AGENT)
+    cl.user_session.set(CURRENT_AGENT_TEAM_NAME,CATCH_UP_AND_EXPLORE_BY_AI_AGENT)
     
     combined_content = ""
     file_count = len(files)
@@ -97,10 +145,7 @@ async def process_uploaded_files(files, message: cl.Message):
         try:
             temp_dir = tempfile.mkdtemp()
             temp_file_path = os.path.join(temp_dir, file.name)
-            
-            # Show progress
-            await cl.Message(content=f"处理文件 {i+1}/{file_count}: {file.name}").send()
-            
+                        
             # Save the uploaded file directly to temp directory
             try:
                 # Use the file's path attribute instead of trying to get bytes
@@ -130,52 +175,71 @@ async def process_uploaded_files(files, message: cl.Message):
                 continue
             
             # Process the file and convert to markdown - pass the original file path
-            await cl.Message(content=f"正在转换 {file.name} 为教学内容...").send()
-            error, content = process_file(temp_file_path, original_file_path=original_file_path)
-            
-            if error:
-                await cl.Message(content=f"处理 {file.name} 时出错: {error}").send()
-                continue
-            
-            combined_content += f"\n\n## Content from {file.name}\n\n{content.markdown}"
-            
+            # First step: 处理文件内容
+            from pathlib import Path
+            file_name = Path(temp_file_path).name
+            async with cl.Step(name=f" 处理文件:{file_name}") as step:
+                error, content = process_file(temp_file_path, original_file_path=original_file_path)
+                if error:
+                    # Add message to the step instead of sending separately
+                    step.set_name(f"处理文件 {file.name} 时发生错误: {str(e)}")
+                else:
+                    step.set_name(f"处理文件 {file.name} 成功")    
+                    # Add success message to the step instead of sending separately
+                    combined_content += f"\n\n## Content from {file.name}\n\n{content.markdown}"
+
+                # Update the step to refresh its content in the UI
+                await step.update()
+                
             # Clean up
             os.remove(temp_file_path)
             os.rmdir(temp_dir)
-            
-            await cl.Message(content=f"✅ 文件 {file.name} 处理成功").send()
-            
+                        
         except Exception as e:
             await cl.Message(content=f"处理文件 {file.name} 时发生错误: {str(e)}").send()
             print(f"Error processing file {file.name}: {traceback.format_exc()}")
     
     if combined_content:
-        # Send the extracted content to the file processor agent
-        async with cl.Step(name="处理文件内容") as step:
-            # Fix: Create a separate message instead of passing string to step.send()
-            await cl.Message(content=f"从 {file_count} 个文件中提取教学内容要求...").send()
-            
-            try:
-                # Fix: Create a separate message instead of passing string to step.send()
-                await cl.Message(content="文件处理完成。正在基于提取的内容生成教学材料...").send()
-                
-                # Now run the catch_up_team with the processed content
-                new_message = cl.Message(content=combined_content)
-                await run_stream_team(catch_up_team, new_message)
-            except asyncio.TimeoutError:
-                await cl.Message(content="内容处理超时，请尝试减少文件数量或拆分为较小的请求。").send()
-            except Exception as e:
-                error_msg = f"内容处理失败: {str(e)}"
-                print(f"Content processing error: {traceback.format_exc()}")
-                await cl.Message(content=error_msg).send()
+        # Create a message with the combined content
+        new_message = cl.Message(content=combined_content)
+        
+        try:                
+            # Now run the catch_up_team with the processed content in a separate step
+            await run_stream_team(catch_up_team, new_message)
+        except asyncio.TimeoutError:
+            await cl.Message(content="内容处理超时，请尝试减少文件数量或拆分为较小的请求。").send()
+        except Exception as e:
+            error_msg = f"内容处理失败: {str(e)}"
+            print(f"Content processing error: {traceback.format_exc()}")
+            await cl.Message(content=error_msg).send()
     else:
         await cl.Message(content="无法从上传的文件中提取内容。请确保文件格式正确且内容可读。").send()
 
 async def run_stream_team(team=SelectorGroupChat, message: cl.Message | None = None):
     executing = False
 
-    async with cl.Step(name="Executing") as executing_step:
+    async with cl.Step(name= cl.user_session.get(CURRENT_AGENT_TEAM_NAME)) as executing_step:
         start = time.time()
+        
+        # 添加时间更新任务
+        update_time_task = None
+        
+        # 定义时间更新函数
+        async def update_step_time():
+            try:
+                while True:
+                    elapsed = round(time.time() - start)
+                    executing_step.name = f"{cl.user_session.get(CURRENT_AGENT_TEAM_NAME)} Executing for {elapsed}s"
+                    await executing_step.update()
+                    await asyncio.sleep(1)  # 每秒更新一次
+            except asyncio.CancelledError:
+                # 任务取消时正常退出
+                pass
+            except Exception as e:
+                print(f"Error updating time: {str(e)}")
+
+        # 启动时间更新任务
+        update_time_task = asyncio.create_task(update_step_time())
 
         final_answer = cl.Message(content="")
 
@@ -184,25 +248,35 @@ async def run_stream_team(team=SelectorGroupChat, message: cl.Message | None = N
             cancellation_token = CancellationToken()
             
             # Use the async generator directly instead of trying to wrap it in a task
-            async for msg in team.run_stream(
-                task=[TextMessage(content=message.content, source="user")],
-                cancellation_token=cancellation_token,
-            ):
+            async for msg in team.run_stream(task=[TextMessage(content=message.content, source="user")],cancellation_token=cancellation_token,):
                 try:
-                    # Check message type properly
                     if isinstance(msg, ModelClientStreamingChunkEvent):
-                        # Only process message if content exists
-                        if not hasattr(msg, 'content') or msg.content is None:
+                        # Ensure content is properly serializable
+                        if not hasattr(msg, 'content'):
                             continue
                             
-                        # Extract content and handle TERMINATE keyword
+                        # Make sure content is serializable
                         content = msg.content
+                        if content is not None:
+                            if not isinstance(content, str):
+                                # Convert non-string content to string safely
+                                try:
+                                    content = ensure_serializable(content)
+                                    if not isinstance(content, str):
+                                        content = str(content)
+                                except Exception as e:
+                                    print(f"Error converting content to string: {str(e)}")
+                                    content = str(content) if content is not None else ""
+                        else:
+                            content = ""
+                        
+                        # Handle TERMINATE keyword
                         if isinstance(content, str) and "TERMINATE" in content:
                             # Remove TERMINATE and everything after it
                             content = content.split("TERMINATE")[0].strip()
                                 
                         # Process based on source
-                        if msg.source != "materials_compiler":
+                        if msg.source != "markdown_content_formator":
                             executing = True
                             if content:  # Only stream non-empty content
                                 await executing_step.stream_token(content)
@@ -216,25 +290,63 @@ async def run_stream_team(team=SelectorGroupChat, message: cl.Message | None = N
                     
                     elif isinstance(msg, StopMessage):
                         # Handle stop messages properly
-                        print(f"Received StopMessage: {msg.content if hasattr(msg, 'content') else 'No content'}")
-                        # Don't try to serialize the entire StopMessage object
-                        if hasattr(msg, 'content') and isinstance(msg.content, str):
-                            content = msg.content
-                            if "TERMINATE" in content:
-                                content = content.split("TERMINATE")[0].strip()
-                            if content:
-                                await final_answer.stream_token(f"\n\n{content}")
+                        print(f"Received StopMessage")
+                        # Extract content if available, or use empty string
+                        content = ""
+                        if hasattr(msg, 'content'):
+                            if isinstance(msg.content, str):
+                                content = msg.content
+                            else:
+                                try:
+                                    content = ensure_serializable(msg.content)
+                                    if not isinstance(content, str):
+                                        content = str(content)
+                                except Exception as e:
+                                    print(f"Error handling StopMessage content: {str(e)}")
+                                    content = str(msg.content) if msg.content is not None else ""
+                                    
+                        if content and "TERMINATE" in content:
+                            content = content.split("TERMINATE")[0].strip()
+                        if content:
+                            final_answer.content += content
+                        
+                        break
                                 
                     elif isinstance(msg, TaskResult):
+                        print("Received TaskResult")
+                        print(f"Received TaskResult with stop reason: {msg.stop_reason}")
                         # Process task results if needed
-                        pass
+                        if msg.stop_reason is not None:
+                            finalAgentContent = msg.messages[-1].content
+                            content = finalAgentContent.split("TERMINATE")[0].strip()
+                            if len(content) > 0:
+                                final_answer.content += content
+                            elif len(msg.messages) >=2 :
+                                final_answer.content += msg.messages[-2].content
                     
-                    elif executing_step is not None and msg is not None:
+                    elif executing_step is not None and msg is not None and not isinstance(msg, BaseChatMessage):
                         # Handle any other message types safely
                         try:
-                            await executing_step.send()
+                            # Extract content if possible
+                            content = ""
+                            if hasattr(msg, 'content'):
+                                if isinstance(msg.content, str):
+                                    content = msg.content
+                                else:
+                                    try:
+                                        content = ensure_serializable(msg.content)
+                                        if not isinstance(content, str):
+                                            content = str(content)
+                                    except Exception as e:
+                                        print(f"Error handling generic message content: {str(e)}")
+                                        content = str(msg.content) if msg.content is not None else ""
+                                        
+                            if content:
+                                await executing_step.stream_token(content)
+                                
                         except Exception as send_error:
                             print(f"Error sending executing step: {str(send_error)}")
+                            print(traceback.format_exc())
                         
                 except Exception as token_error:
                     # Log the error but continue processing
@@ -247,9 +359,21 @@ async def run_stream_team(team=SelectorGroupChat, message: cl.Message | None = N
             print(f"Error in message stream: {str(stream_error)}")
             print(traceback.format_exc())
             await cl.Message(content=f"生成内容时出错: {str(stream_error)}").send()
+        
+        finally:
+            # 无论如何都要取消时间更新任务
+            if update_time_task:
+                update_time_task.cancel()
+                try:
+                    await update_time_task
+                except asyncio.CancelledError:
+                    pass
             
-    # Only try to create MD and PDF if we have content
+    # Send the final answer message to the UI
     if final_answer.content:
+        # Send the final answer to the UI
+        await final_answer.send()
+        
         try:
             # Clean up content before saving
             clean_content = final_answer.content
@@ -257,7 +381,7 @@ async def run_stream_team(team=SelectorGroupChat, message: cl.Message | None = N
                 clean_content = clean_content.split("TERMINATE")[0].strip()
             
             # Create timestamp for filenames
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             
             # Save markdown to public/md directory
             os.makedirs("public/md", exist_ok=True)
@@ -269,15 +393,12 @@ async def run_stream_team(team=SelectorGroupChat, message: cl.Message | None = N
             pdf_file = md_to_pdf(clean_content)
             
             # Add both links to the response
-            await final_answer.stream_token(f"\n\nMarkdown: [{os.path.basename(md_filename)}]({md_filename})")
-            await final_answer.stream_token(f"\n\nPDF: [{os.path.basename(pdf_file)}]({pdf_file})")
+            await cl.Message(content=f"\n\nMarkdown: [{os.path.basename(md_filename)}]({md_filename})").send()
+            await cl.Message(content=f"\n\nPDF: [{os.path.basename(pdf_file)}]({pdf_file})").send()
         except Exception as file_error:
             print(f"Error creating files: {file_error}")
             print(traceback.format_exc())
-            await final_answer.stream_token("\n\n无法创建文件，请检查生成的内容。")
-    
-    # Make sure to send the final answer even if empty
-    await final_answer.send()
+            await cl.Message(content="\n\n无法创建文件，请检查生成的内容。").send()
 
 def md_to_pdf(md: str) -> str:
     import base64
@@ -289,7 +410,8 @@ def md_to_pdf(md: str) -> str:
     os.makedirs("public/pdfs", exist_ok=True)
     os.makedirs("public/fonts", exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
     filename = f"public/pdfs/course_materials_{timestamp}.pdf"
 
     # Clean up the content
@@ -308,7 +430,8 @@ def md_to_pdf(md: str) -> str:
     if not os.path.exists(chinese_font_path):
         try:
             print("Downloading Chinese font...")
-            font_url = "https://github.com/jsntn/webfonts/blob/master/NotoSansSC-Regular.ttf"
+            # Fix: Updated URL to direct download link instead of GitHub blob page
+            font_url = "https://github.com/jsntn/webfonts/raw/master/NotoSansSC-Regular.ttf"
             urllib.request.urlretrieve(font_url, chinese_font_path)
             print(f"Downloaded font to {chinese_font_path}")
         except Exception as font_error:
@@ -329,7 +452,6 @@ def md_to_pdf(md: str) -> str:
             try:
                 pdfmetrics.registerFont(TTFont("NotoSansSC", chinese_font_path))
                 has_chinese_font = True
-                print("Successfully registered Chinese font")
             except Exception as font_register_error:
                 print(f"Error registering font: {str(font_register_error)}")
         
@@ -348,8 +470,9 @@ def md_to_pdf(md: str) -> str:
         y_position = height - 80
         line_height = 14
         
-        # Simplify content to plain text
-        plain_text = re.sub(r'#+ (.*)', r'\1', content)  # Headers to plain text
+        # Simplify content to plain text - use 'content' instead of undefined 'plain_text'
+        plain_text = content  # Initialize plain_text with content
+        plain_text = re.sub(r'#+ (.*)', r'\1', plain_text)  # Headers to plain text
         plain_text = re.sub(r'\*\*(.*?)\*\*', r'\1', plain_text)  # Remove bold
         plain_text = re.sub(r'\*(.*?)\*', r'\1', plain_text)  # Remove italics
         

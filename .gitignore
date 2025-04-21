@@ -175,3 +175,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+public/pdfs/*.pdf
+public/md/*.md
+
+.files/*

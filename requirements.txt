@@ -1,10 +1,7 @@
 chainlit~=2.4.400
 
-autogen-agentchat~=0.5.1
-autogen-ext[openai]~=0.5.1
-autogen-ext[web-surfer]~=0.5.1
-autogen-ext[file-surfer]~=0.5.1
-autogen-ext[magentic-one]~=0.5.1
+autogen-agentchat~=0.5.3
+autogen-ext[openai,web-surfer,file-surfer,magentic-one]~=0.5.3
 
 markdown-pdf~=1.6
 html2text~=2024.2.26
@@ -19,3 +16,4 @@ Markdown~=3.7
 reportlab~=4.3.1
 PyMuPDF>=1.25.3
 weasyprint~=65.0
+openai~=1.74.0

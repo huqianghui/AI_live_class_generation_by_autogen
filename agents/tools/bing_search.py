@@ -10,11 +10,13 @@ import httpx
 from autogen_core.tools import FunctionTool
 from bs4 import BeautifulSoup
 
+from agents.tools.fetch_webpage import clean_image_url
+
 
 @cl.step(type="tool", name="bing_search")
 async def bing_search(
     query: str,
-    num_results: int = 3,
+    num_results: int = 2,
     include_snippets: bool = True,
     include_content: bool = True,
     content_max_length: Optional[int] = 10000,
@@ -32,8 +34,8 @@ async def bing_search(
         include_snippets: Include result snippets in output
         include_content: Include full webpage content in markdown format
         content_max_length: Maximum length of webpage content (if included)
-        language: Language code for search results (e.g., 'en', 'es', 'fr')
-        country: Optional market code for search results (e.g., 'us', 'uk')
+        language: Language code for search results (e.g., 'en', 'es', 'fr', 'zh-CN')
+        country: Optional market code for search results (e.g., 'us', 'uk', 'cn')
         safe_search: SafeSearch setting ('off', 'moderate', or 'strict')
         response_filter: Type of results ('webpages', 'news', 'images', or 'videos')
 
@@ -110,13 +112,22 @@ async def bing_search(
     # Build request headers and parameters
     headers = {"Ocp-Apim-Subscription-Key": api_key, "Accept": "application/json"}
 
+    # Construct the proper market parameter
+    # If language already contains a country code (like zh-CN), use it directly
+    # Otherwise, combine language with country if provided
+    if "-" in language:
+        market = language
+    else:
+        market = f"{language}-{country.upper()}" if country else language
+    
     params = {
         "q": query,
-        "count": min(max(1, num_results), 50),
-        "mkt": f"{language}-{country.upper()}" if country else language,
+        "count": min(max(1, num_results), 10),
+        "mkt": market,
         "safeSearch": safe_search.capitalize(),
         "responseFilter": response_filter,
         "textFormat": "raw",
+        "setLang": language.split("-")[0],  # Add explicit language parameter
     }
 
     # Make the request
@@ -186,14 +197,14 @@ async def bing_search(
                     )
 
             elif response_filter == "images":
-                result["link"] = item.get("contentUrl", "")
-                result["thumbnail"] = item.get("thumbnailUrl", "")
+                result["link"] = clean_image_url(item.get("contentUrl", ""))
+                result["thumbnail"] = clean_image_url(item.get("thumbnailUrl", ""))
                 if include_snippets:
                     result["snippet"] = item.get("description", "")
 
             elif response_filter == "videos":
-                result["link"] = item.get("contentUrl", "")
-                result["thumbnail"] = item.get("thumbnailUrl", "")
+                result["link"] = clean_image_url(item.get("contentUrl", ""))
+                result["thumbnail"] = clean_image_url(item.get("thumbnailUrl", ""))
                 if include_snippets:
                     result["snippet"] = item.get("description", "")
                 result["duration"] = item.get("duration", "")

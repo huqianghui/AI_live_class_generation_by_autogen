@@ -1,11 +1,25 @@
 from typing import Dict, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import chainlit as cl
 import html2text
 import httpx
 from autogen_core.tools import FunctionTool
 from bs4 import BeautifulSoup
+
+
+def clean_image_url(url: str) -> str:
+    """Remove query parameters from image URLs.
+    
+    Args:
+        url: The image URL that might contain query parameters
+        
+    Returns:
+        str: Clean URL without query parameters
+    """
+    parsed = urlparse(url)
+    clean = parsed.scheme + "://" + parsed.netloc + parsed.path
+    return clean
 
 
 @cl.step(type="tool", name="fetch_webpage")
@@ -48,12 +62,15 @@ async def fetch_webpage(
             for script in soup(["script", "style"]):
                 script.decompose()
 
-            # Convert relative URLs to absolute
+            # Convert relative URLs to absolute and clean image URLs
             for tag in soup.find_all(["a", "img"]):
                 if tag.get("href"):
                     tag["href"] = urljoin(url, tag["href"])
                 if tag.get("src"):
                     tag["src"] = urljoin(url, tag["src"])
+                    # Clean image URLs by removing query parameters
+                    if tag.name == "img":
+                        tag["src"] = clean_image_url(tag["src"])
 
             # Configure HTML to Markdown converter
             h2t = html2text.HTML2Text()
@@ -77,7 +94,6 @@ async def fetch_webpage(
     except Exception as e:
         raise ValueError(f"Error processing webpage: {str(e)}") from e
 
-
 fetch_webpage_tool = FunctionTool(
     fetch_webpage,
     name="FetchWebpageTool",
@@ -89,6 +105,6 @@ fetch_webpage_tool = FunctionTool(
         "httpx",
         {"module": "bs4", "imports": ["BeautifulSoup"]},
         {"module": "html2text", "imports": ["HTML2Text"]},
-        {"module": "urllib.parse", "imports": ["urljoin"]},
+        {"module": "urllib.parse", "imports": ["urljoin", "urlparse"]},
     ],
 )
